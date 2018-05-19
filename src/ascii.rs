@@ -3,7 +3,7 @@ use std::arch::x86_64::*;
 use std::simd::*;
 
 #[inline]
-pub fn std(input: &[u8]) -> bool {
+pub fn validate(input: &[u8]) -> bool {
     let len = input.len();
     let amax = u8x64::splat(0x80);
     let mut err = u8x64::splat(0);
@@ -18,9 +18,9 @@ pub fn std(input: &[u8]) -> bool {
     // TODO: Throw this in a vector with extra zeroes
     return if len >= 64 {
         err |= u8x64::load_unaligned(&input[len - 64..len]);
-        !err.ge(amax).or()
+        (err & amax).max_element() < 0x80
     } else {
-        let err = err.ge(amax);
+        let err = (err & amax).max_element();
 
         let mut tail_has_char: u8 = 0;
         while i < len {
@@ -28,14 +28,14 @@ pub fn std(input: &[u8]) -> bool {
             i += 1;
         }
 
-        !err.or() && tail_has_char & 0x80 == 0
+        (err | tail_has_char) & 0x80 == 0
     };
 }
 
 pub fn faster(input: &[u8]) -> bool {
     let amax = u8s(0x80);
 
-    input
+    !input
         .simd_iter(u8s(0))
         .simd_reduce(u8s(0), |acc, v| acc | v)
         .ge(amax)
@@ -98,47 +98,11 @@ pub fn super_arch(input: &[u8]) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn short_valid_ascii() {
-        let s = b"test";
-        assert_eq!(true, std(s));
-        assert_eq!(true, faster(s));
-        assert_eq!(true, arch(s));
-        assert_eq!(true, super_arch(s));
-    }
-
-    #[test]
-    fn long_valid_ascii() {
-        let s = b"aisudghaywhfigbauyswfgawsyfgbauywgefauweyhgfuawygefyuaywfaiufhiuaghfaiygfway";
-        assert_eq!(true, std(s));
-        assert_eq!(true, faster(s));
-        assert_eq!(true, arch(s));
-        assert_eq!(true, super_arch(s));
-    }
-
-    #[test]
-    fn short_invalid_ascii() {
-        let s = b"\x99";
-        assert_eq!(false, std(s));
-        assert_eq!(false, faster(s));
-        assert_eq!(false, arch(s));
-        assert_eq!(false, super_arch(s));
-    }
-
-    #[test]
-    fn long_invalid_ascii() {
-        let s = b"aisudghaywhfigbauyswfgawsyfgbauywgefauweyhgfuawygefyuaywfaiufhiuaghfaiygfway\x99";
-        assert_eq!(false, std(s));
-        assert_eq!(false, faster(s));
-        assert_eq!(false, arch(s));
-        assert_eq!(false, super_arch(s));
-    }
-
     proptest! {
         #[test]
         fn std_checks_ascii(ref s in "\\PC*") {
             let s = s.as_bytes();
-            prop_assert_eq!(s.is_ascii(), std(s));
+            prop_assert_eq!(s.is_ascii(), validate(s));
         }
 
         #[test]

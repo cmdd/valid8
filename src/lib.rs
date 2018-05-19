@@ -6,4 +6,3 @@ extern crate faster;
 extern crate proptest;
 
 pub mod ascii;
-pub mod utf8;
