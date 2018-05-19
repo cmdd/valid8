@@ -9,7 +9,6 @@ fn validate_ascii(c: &mut Criterion) {
     let s1 = include_bytes!("data/ascii1");
     let params = vec![s1];
 
-    let fs = vec![manual, faster, arch, suparch, default];
     c.bench(
         "ascii",
         fs,
