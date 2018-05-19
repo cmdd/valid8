@@ -35,7 +35,7 @@ pub fn validate(input: &[u8]) -> bool {
 pub fn faster(input: &[u8]) -> bool {
     let amax = u8s(0x80);
 
-    !input
+    input
         .simd_iter(u8s(0))
         .simd_reduce(u8s(0), |acc, v| acc | v)
         .ge(amax)
