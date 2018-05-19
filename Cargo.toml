@@ -1,0 +1,19 @@
+[package]
+name = "valid8"
+version = "0.1.0"
+authors = ["David Cao <dcao@protonmail.com>"]
+
+[dependencies]
+faster = { git = "https://github.com/AdamNiederer/faster" }
+
+[dev-dependencies]
+criterion = "0.2"
+proptest = "0.7"
+
+[[bench]]
+name = "bench"
+harness = false
+
+[profile.dev]
+lto = true
+codegen-units = 1
