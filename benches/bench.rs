@@ -11,7 +11,6 @@ fn validate_ascii(c: &mut Criterion) {
 
     c.bench(
         "ascii",
-        fs,
         ParameterizedBenchmark::new("validate", |b, i| b.iter(|| ascii::validate(*i)), params)
             .with_function("faster", |b, i| b.iter(|| ascii::faster(*i)))
             .with_function("super_arch", |b, i| b.iter(|| ascii::super_arch(*i)))
