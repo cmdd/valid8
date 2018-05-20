@@ -16,7 +16,7 @@ pub fn validate(input: &[u8]) -> bool {
     }
 
     // TODO: Throw this in a vector with extra zeroes
-    return if len >= 64 {
+    if len >= 64 {
         err |= u8x64::load_unaligned(&input[len - 64..len]);
         (err & amax).max_element() < 0x80
     } else {
@@ -29,7 +29,7 @@ pub fn validate(input: &[u8]) -> bool {
         }
 
         (err | tail_has_char) & 0x80 == 0
-    };
+    }
 }
 
 pub fn faster(input: &[u8]) -> bool {
