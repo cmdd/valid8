@@ -1,3 +1,4 @@
+// TODO: no_std
 #![feature(stdsimd)]
 
 extern crate faster;
@@ -6,3 +7,4 @@ extern crate faster;
 extern crate proptest;
 
 pub mod ascii;
+pub mod utf8;

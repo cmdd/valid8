@@ -1,6 +1,5 @@
 use faster::*;
-use std::arch::x86_64::*;
-use std::simd::*;
+use std::{arch::x86_64::*, simd::*};
 
 #[inline]
 pub fn validate(input: &[u8]) -> bool {
@@ -42,6 +41,8 @@ pub fn faster(input: &[u8]) -> bool {
         .scalar_reduce(true, |acc, v| acc && v == 0)
 }
 
+// TODO: Guard based on SIMD support
+// see: https://doc.rust-lang.org/beta/std/arch/index.html
 pub fn arch(input: &[u8]) -> bool {
     let len = input.len();
     let mut i = 0;
@@ -49,7 +50,7 @@ pub fn arch(input: &[u8]) -> bool {
         let mut err = _mm_setzero_si128();
 
         while i + 15 < len {
-            let cb = _mm_loadu_si128(input.as_ptr() as *const __m128i);
+            let cb = _mm_loadu_si128(input.as_ptr().offset(i as isize) as *const __m128i);
             err = _mm_or_si128(err, cb);
             i += 16;
         }

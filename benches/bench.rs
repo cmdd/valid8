@@ -3,8 +3,8 @@ extern crate criterion;
 extern crate valid8;
 
 use criterion::{Criterion, ParameterizedBenchmark, Throughput};
-use valid8::*;
 use std::{fmt, ops::Deref};
+use valid8::*;
 
 struct ByteFile(&'static str, &'static [u8]);
 
@@ -39,5 +39,18 @@ fn validate_ascii(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, validate_ascii);
+fn validate_utf8(c: &mut Criterion) {
+    let ascii_short = ByteFile("valid_ascii_short", include_bytes!("data/ascii_short"));
+    let ascii_medium = ByteFile("valid_ascii_medium", include_bytes!("data/ascii_medium"));
+    let ascii_long = ByteFile("valid_ascii_long", include_bytes!("data/ascii_long"));
+    let params = vec![ascii_short, ascii_medium, ascii_long];
+
+    c.bench(
+        "utf8",
+        ParameterizedBenchmark::new("validate", |b, i| b.iter(|| utf8::validate(i)), params)
+            .throughput(|s| Throughput::Bytes(s.len() as u32)),
+    );
+}
+
+criterion_group!(benches, validate_utf8);
 criterion_main!(benches);
