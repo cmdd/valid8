@@ -12,12 +12,12 @@ enum AlignCount {
 }
 
 // TODO: Run-time vs compile-time feature gating
-// TODO: Improve generic perf
-#[inline]
 fn alignri(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
-    #[inline]
     fn avx2(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
+        #[cfg(target_arch = "x86")]
+        use std::{arch::x86::{_mm256_alignr_epi8}, mem::transmute};
+        #[cfg(target_arch = "x86_64")]
         use std::{arch::x86_64::{_mm256_alignr_epi8}, mem::transmute};
 
         match bytes {
@@ -26,6 +26,34 @@ fn alignri(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
         }
     }
 
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "ssse3"))]
+    fn ssse3(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
+        #[cfg(target_arch = "x86")]
+        use std::{arch::x86::{_mm_alignr_epi8, __m128i}, mem::transmute};
+        #[cfg(target_arch = "x86_64")]
+        use std::{arch::x86_64::{_mm_alignr_epi8, __m128i}, mem::transmute};
+
+        unsafe {
+            let a1: *mut __m128i = (&mut transmute(a) as *mut i8x32) as *mut __m128i;
+            let a2 = a1.offset(1);
+
+            let b1: *const __m128i = (&transmute(b) as *const i8x32) as *const __m128i;
+            let b2 = b1.offset(1);
+
+            *a1 = match bytes {
+                AlignCount::ThirtyOne => _mm_alignr_epi8(*a1, *b1, 31),
+                AlignCount::Thirty => _mm_alignr_epi8(*a1, *b1, 30),
+            };
+            *a2 = match bytes {
+                AlignCount::ThirtyOne => _mm_alignr_epi8(*a2, *b2, 31),
+                AlignCount::Thirty => _mm_alignr_epi8(*a2, *b2, 30),
+            };
+
+            transmute(*(a1 as *mut i8x32))
+        }
+    }
+
+    // TODO: This implementation is incorrect. And slow.
     fn generic(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
         let bytes = match bytes {
             AlignCount::ThirtyOne => 31,
@@ -47,17 +75,19 @@ fn alignri(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
         i8x32::load_unaligned(&zero[64 - bytes..96 - bytes])
     }
 
-    if cfg!(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2")) {
-        avx2(a, b, bytes)
-    } else {
-        generic(a, b, bytes)
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))] {
+        return avx2(a, b);
+    }
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "ssse3"))] {
+        return ssse3(a, b);
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))] {
+        return generic(a, b);
     }
 }
 
-#[inline]
 fn shuffle(a: i8x32, b: i8x32) -> i8x32 {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
-    #[inline]
     fn avx2(a: i8x32, b: i8x32) -> i8x32 {
         #[cfg(target_arch = "x86")]
         use std::{arch::x86::{_mm256_shuffle_epi8}, mem::transmute};
@@ -67,6 +97,28 @@ fn shuffle(a: i8x32, b: i8x32) -> i8x32 {
         unsafe { transmute(_mm256_shuffle_epi8(transmute(a), transmute(b))) }
     }
 
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "ssse3"))]
+    fn ssse3(a: i8x32, b: i8x32) -> i8x32 {
+        #[cfg(target_arch = "x86")]
+        use std::{arch::x86::{_mm_shuffle_epi8, __m128i}, mem::transmute};
+        #[cfg(target_arch = "x86_64")]
+        use std::{arch::x86_64::{_mm_shuffle_epi8, __m128i}, mem::transmute};
+
+        unsafe {
+            let a1: *mut __m128i = (&mut transmute(a) as *mut i8x32) as *mut __m128i;
+            let a2 = a1.offset(1);
+
+            let b1: *const __m128i = (&transmute(b) as *const i8x32) as *const __m128i;
+            let b2 = b1.offset(1);
+
+            *a1 = _mm_shuffle_epi8(*a1, *b1);
+            *a2 = _mm_shuffle_epi8(*a2, *b2);
+
+            transmute(*(a1 as *mut i8x32))
+        }
+    }
+
+    // TODO: Performance.
     fn generic(a: i8x32, b: i8x32) -> i8x32 {
         let mut res = i8x32::splat(0);
         for i in 0..16 {
@@ -81,14 +133,17 @@ fn shuffle(a: i8x32, b: i8x32) -> i8x32 {
         res
     }
 
-    if cfg!(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2")) {
-        avx2(a, b)
-    } else {
-        generic(a, b)
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))] {
+        return avx2(a, b);
+    }
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "ssse3"))] {
+        return ssse3(a, b);
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))] {
+        return generic(a, b);
     }
 }
 
-#[inline]
 pub fn validate(input: &[u8]) -> bool {
     // We keep a running mask of if we've seen an error yet.
     let mut err = m8x32::splat(false);
@@ -186,16 +241,16 @@ mod tests {
         let a = i8x32::splat(1);
         let b = i8x32::splat(2);
         let valid_31 = i8x32::new(
-            1, 1, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1, 1, 1, 2,
+            1, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
         );
         let valid_30 = i8x32::new(
-            1, 1, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1, 1, 2, 2,
+            1, 1, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+            1, 1, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
         );
         assert_eq!(valid_31, alignri(a, b, AlignCount::ThirtyOne));
         assert_eq!(valid_30, alignri(a, b, AlignCount::Thirty));
@@ -215,5 +270,12 @@ mod tests {
         let s = b"affffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 
         assert_eq!(true, validate(s));
+    }
+
+    #[test]
+    fn std_checks_wrong_utf8() {
+        let s = [0xc0 as u8, 0xae as u8];
+
+        assert_eq!(false, validate(&s));
     }
 }
