@@ -1,4 +1,6 @@
-use std::{ptr::copy_nonoverlapping, simd::*};
+use std::{
+    ptr::copy_nonoverlapping, simd::{i8x32, m8x32, u8x32, FromBits},
+};
 
 const CONT_LENGTHS: [i8; 64] = [
     1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2, 2, 3, 4, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2, 2, 3, 4,
@@ -8,36 +10,51 @@ const CONT_LENGTHS: [i8; 64] = [
 #[derive(Clone, Copy)]
 enum AlignCount {
     ThirtyOne,
-    Thirty
+    Thirty,
 }
 
-// TODO: Run-time vs compile-time feature gating
 fn alignri(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
-    fn avx2(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
+    {
         #[cfg(target_arch = "x86")]
-        use std::{arch::x86::{_mm256_alignr_epi8}, mem::transmute};
+        use std::{arch::x86::_mm256_alignr_epi8, mem::transmute};
         #[cfg(target_arch = "x86_64")]
-        use std::{arch::x86_64::{_mm256_alignr_epi8}, mem::transmute};
+        use std::{arch::x86_64::_mm256_alignr_epi8, mem::transmute};
 
-        match bytes {
-            AlignCount::ThirtyOne => unsafe { transmute(_mm256_alignr_epi8(transmute(a), transmute(b), 31)) },
-            AlignCount::Thirty => unsafe { transmute(_mm256_alignr_epi8(transmute(a), transmute(b), 30)) },
-        }
+        return match bytes {
+            AlignCount::ThirtyOne => unsafe {
+                transmute(_mm256_alignr_epi8(transmute(a), transmute(b), 31))
+            },
+            AlignCount::Thirty => unsafe {
+                transmute(_mm256_alignr_epi8(transmute(a), transmute(b), 30))
+            },
+        };
     }
 
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "ssse3"))]
-    fn ssse3(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
+    #[cfg(
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            not(target_feature = "avx2"),
+            target_feature = "ssse3"
+        )
+    )]
+    {
         #[cfg(target_arch = "x86")]
-        use std::{arch::x86::{_mm_alignr_epi8, __m128i}, mem::transmute};
+        use std::{
+            arch::x86::{__m128i, _mm_alignr_epi8},
+        };
         #[cfg(target_arch = "x86_64")]
-        use std::{arch::x86_64::{_mm_alignr_epi8, __m128i}, mem::transmute};
+        use std::{
+            arch::x86_64::{__m128i, _mm_alignr_epi8},
+        };
 
-        unsafe {
-            let a1: *mut __m128i = (&mut transmute(a) as *mut i8x32) as *mut __m128i;
+        return unsafe {
+            let mut a = a;
+            
+            let a1: *mut __m128i = (&mut a as *mut i8x32) as *mut __m128i;
             let a2 = a1.offset(1);
 
-            let b1: *const __m128i = (&transmute(b) as *const i8x32) as *const __m128i;
+            let b1: *const __m128i = (&b as *const i8x32) as *const __m128i;
             let b2 = b1.offset(1);
 
             *a1 = match bytes {
@@ -49,98 +66,112 @@ fn alignri(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
                 AlignCount::Thirty => _mm_alignr_epi8(*a2, *b2, 30),
             };
 
-            transmute(*(a1 as *mut i8x32))
-        }
+            *(a1 as *mut i8x32)
+        };
     }
 
-    // TODO: This implementation is incorrect. And slow.
-    fn generic(a: i8x32, b: i8x32, bytes: AlignCount) -> i8x32 {
+    // This is incorrect
+    #[cfg(
+        not(
+            all(
+                any(target_arch = "x86", target_arch = "x86_64"),
+                any(target_feature = "avx2", target_feature = "ssse3")
+            )
+        )
+    )]
+    {
         let bytes = match bytes {
             AlignCount::ThirtyOne => 31,
             AlignCount::Thirty => 30,
         };
         let mut zero = [0; 96];
         let z_ptr = zero.as_mut_ptr();
-        let mut sa: [i8; 32] = [0; 32];
-        let mut sb: [i8; 32] = [0; 32];
-
-        i8x32::store_unaligned(a, &mut sa);
-        i8x32::store_unaligned(b, &mut sb);
+        let sa: *const i8 = (&a as *const i8x32) as *const i8;
+        let sb: *const i8 = (&b as *const i8x32) as *const i8;
 
         unsafe {
-            copy_nonoverlapping(sa.as_ptr(), z_ptr.offset(32), 32);
-            copy_nonoverlapping(sb.as_ptr(), z_ptr.offset(64), 32);
+            copy_nonoverlapping(sa, z_ptr.offset(32), 32);
+            copy_nonoverlapping(sb, z_ptr.offset(64), 32);
         }
 
-        i8x32::load_unaligned(&zero[64 - bytes..96 - bytes])
-    }
-
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))] {
-        return avx2(a, b);
-    }
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "ssse3"))] {
-        return ssse3(a, b);
-    }
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))] {
-        return generic(a, b);
+        return i8x32::load_unaligned(&zero[64 - bytes..96 - bytes]);
     }
 }
 
 fn shuffle(a: i8x32, b: i8x32) -> i8x32 {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
-    fn avx2(a: i8x32, b: i8x32) -> i8x32 {
+    {
         #[cfg(target_arch = "x86")]
-        use std::{arch::x86::{_mm256_shuffle_epi8}, mem::transmute};
+        use std::{arch::x86::_mm256_shuffle_epi8, mem::transmute};
         #[cfg(target_arch = "x86_64")]
-        use std::{arch::x86_64::{_mm256_shuffle_epi8}, mem::transmute};
+        use std::{arch::x86_64::_mm256_shuffle_epi8, mem::transmute};
 
-        unsafe { transmute(_mm256_shuffle_epi8(transmute(a), transmute(b))) }
+        return unsafe { transmute(_mm256_shuffle_epi8(transmute(a), transmute(b))) };
     }
 
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "ssse3"))]
-    fn ssse3(a: i8x32, b: i8x32) -> i8x32 {
+    #[cfg(
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            not(target_feature = "avx2"),
+            target_feature = "ssse3"
+        )
+    )]
+    {
         #[cfg(target_arch = "x86")]
-        use std::{arch::x86::{_mm_shuffle_epi8, __m128i}, mem::transmute};
+        use std::{
+            arch::x86::{__m128i, _mm_shuffle_epi8},
+        };
         #[cfg(target_arch = "x86_64")]
-        use std::{arch::x86_64::{_mm_shuffle_epi8, __m128i}, mem::transmute};
+        use std::{
+            arch::x86_64::{__m128i, _mm_shuffle_epi8},
+        };
 
-        unsafe {
-            let a1: *mut __m128i = (&mut transmute(a) as *mut i8x32) as *mut __m128i;
+        return unsafe {
+            let mut a = a;
+
+            let a1: *mut __m128i = (&mut a as *mut i8x32) as *mut __m128i;
             let a2 = a1.offset(1);
 
-            let b1: *const __m128i = (&transmute(b) as *const i8x32) as *const __m128i;
+            let b1: *const __m128i = (&b as *const i8x32) as *const __m128i;
             let b2 = b1.offset(1);
 
             *a1 = _mm_shuffle_epi8(*a1, *b1);
             *a2 = _mm_shuffle_epi8(*a2, *b2);
 
-            transmute(*(a1 as *mut i8x32))
-        }
+            *(a1 as *mut i8x32)
+        };
     }
 
-    // TODO: Performance.
-    fn generic(a: i8x32, b: i8x32) -> i8x32 {
-        let mut res = i8x32::splat(0);
-        for i in 0..16 {
-            if b.extract(i) & -128 == 0 {
-                res = res.replace(i, a.extract((b.extract(i) % 16) as usize));
+    #[cfg(
+        not(
+            all(
+                any(target_arch = "x86", target_arch = "x86_64"),
+                any(target_feature = "avx2", target_feature = "ssse3")
+            )
+        )
+    )]
+    {
+        return unsafe {
+            let mut a = a;
+            let a: *mut i8 = (&mut a as *mut i8x32) as *mut i8;
+            let b: *const i8 = (&b as *const i8x32) as *const i8;
+        
+            for i in 0..16 {
+                *a.offset(i) = if *b.offset(i) & -128 == 0 {
+                    *a.offset((*b.offset(i) % 16) as isize)
+                } else {
+                    0
+                };
+                
+                *a.offset(i + 16) = if *b.offset(i + 16) & -128 == 0 {
+                    *a.offset((*b.offset(i + 16) % 16 + 16) as isize)
+                } else {
+                    0
+                }
             }
-            if b.extract(i + 16) & -128 == 0 {
-                res = res.replace(i + 16, a.extract((b.extract(i + 16) % 16 + 16) as usize));
-            }
+
+            *(a as *mut i8x32)
         }
-
-        res
-    }
-
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))] {
-        return avx2(a, b);
-    }
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "ssse3"))] {
-        return ssse3(a, b);
-    }
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))] {
-        return generic(a, b);
     }
 }
 
@@ -155,12 +186,14 @@ pub fn validate(input: &[u8]) -> bool {
     let max = u8x32::splat(0xF4);
     let cont_lengths = i8x32::load_unaligned(&CONT_LENGTHS);
     let initial_mins = i8x32::new(
-        -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -62, -128, -31, -15,
-        -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -62, -128, -31, -15,
+        -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -62, -128, -31,
+        -15, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -62, -128,
+        -31, -15,
     );
     let second_mins = i8x32::new(
-        -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, 127, 127, -96, -112,
-        -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, 127, 127, -96, -112,
+        -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, 127, 127, -96,
+        -112, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, 127, 127,
+        -96, -112,
     );
 
     let check_bytes = |mut err, bytes, prev_bytes, prev_high, conts| {
@@ -177,7 +210,8 @@ pub fn validate(input: &[u8]) -> bool {
 
         let initial_lengths = shuffle(cont_lengths, high_nibbles);
         let conts = {
-            let sum = initial_lengths + (alignri(initial_lengths, conts, AlignCount::ThirtyOne) - i8x32::splat(1));
+            let sum = initial_lengths
+                + (alignri(initial_lengths, conts, AlignCount::ThirtyOne) - i8x32::splat(1));
             sum + (alignri(sum, conts, AlignCount::Thirty) - i8x32::splat(2))
         };
         err |= conts
@@ -208,7 +242,6 @@ pub fn validate(input: &[u8]) -> bool {
         conts = res.2;
     }
 
-    // TODO: What to do with the rest of the bytes
     if input.len() % 32 != 0 {
         let mut remain = [0; 32];
         let rest = &input[32 * (input.len() / 32)..];
@@ -224,8 +257,8 @@ pub fn validate(input: &[u8]) -> bool {
         !check_bytes(err, nb, bytes, high, conts).0.or()
     } else {
         err |= conts.gt(i8x32::new(
-            9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-            9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 1,
+            9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+            9, 9, 1,
         ));
 
         !err.or()
@@ -241,16 +274,12 @@ mod tests {
         let a = i8x32::splat(1);
         let b = i8x32::splat(2);
         let valid_31 = i8x32::new(
-            1, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
-            1, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
         );
         let valid_30 = i8x32::new(
-            1, 1, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
-            1, 1, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0,
+            1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
         );
         assert_eq!(valid_31, alignri(a, b, AlignCount::ThirtyOne));
         assert_eq!(valid_30, alignri(a, b, AlignCount::Thirty));
@@ -258,9 +287,7 @@ mod tests {
 
     #[test]
     fn shuffle_valid() {
-        let a = i8x32::splat(0)
-            .replace(0, 1)
-            .replace(16, 1);
+        let a = i8x32::splat(0).replace(0, 1).replace(16, 1);
         let b = i8x32::splat(0);
         assert_eq!(i8x32::splat(1), shuffle(a, b));
     }

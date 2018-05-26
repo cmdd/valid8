@@ -14,7 +14,6 @@ pub fn validate(input: &[u8]) -> bool {
         i += 64;
     }
 
-    // TODO: Throw this in a vector with extra zeroes
     if len >= 64 {
         err |= u8x64::load_unaligned(&input[len - 64..len]);
         (err & amax).max_element() < 0x80

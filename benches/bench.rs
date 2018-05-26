@@ -52,5 +52,5 @@ fn validate_utf8(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, validate_utf8);
+criterion_group!(benches, validate_ascii, validate_utf8);
 criterion_main!(benches);
